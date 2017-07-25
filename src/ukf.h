@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <iostream>
 
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
@@ -121,6 +122,8 @@ private:
 
     void PredictLidarMeasurement(const VectorXd &z);
     void UpdateStateLidar(const VectorXd &z);
+
+    void normalizeAngles(VectorXd &v, int i);
 
 };
 

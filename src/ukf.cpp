@@ -1,16 +1,13 @@
 #include "ukf.h"
-#include "Eigen/Dense"
-#include <iostream>
 
 using namespace std;
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 using std::vector;
 
-/**
- * Initializes Unscented Kalman filter
- */
 UKF::UKF() {
+    is_initialized_ = false;
+
     // if this is false, laser measurements will be ignored (except during init)
     use_laser_ = true;
 
@@ -19,11 +16,10 @@ UKF::UKF() {
 
     //set state dimension
     n_x_ = 5;
-
-    lambda_ = n_x_ - 3;
-
     //set augmented dimension
     n_aug_ = 7;
+
+    lambda_ = 3 - n_aug_;
 
     nis_radar_count_ = 0.;
     nis_radar_ok_count_ = 0.;
@@ -42,10 +38,10 @@ UKF::UKF() {
     P_ = MatrixXd(n_x_, n_x_);
 
     // Process noise standard deviation longitudinal acceleration in m/s^2
-    std_a_ = 6;
+    std_a_ = 3;
 
     // Process noise standard deviation yaw acceleration in rad/s^2
-    std_yawdd_ = 0.01;
+    std_yawdd_ = 1;
 
     // Laser measurement noise standard deviation position1 in m
     std_laspx_ = 0.15;
@@ -62,15 +58,6 @@ UKF::UKF() {
     // Radar measurement noise standard deviation radius change in m/s
     std_radrd_ = 0.3;
 
-    /**
-    TODO:
-
-    Complete the initialization. See ukf.h for other member properties.
-
-    Hint: one or more values initialized above might be wildly off...
-    */
-
-    // set weights
     weights_ = VectorXd(2 * n_aug_ + 1);
     double weight_0 = lambda_ / (lambda_ + n_aug_);
     weights_(0) = weight_0;
@@ -79,11 +66,11 @@ UKF::UKF() {
         weights_(i) = weight;
     }
 
-    P_ << 1, 0, 0, 0, 0,
-            0, 1, 0, 0, 0,
-            0, 0, 1000, 0, 0,
-            0, 0, 0, 1000, 0,
-            0, 0, 0, 0, 1000;
+    P_ << .1, 0, 0, 0, 0,
+            0, .1, 0, 0, 0,
+            0, 0, 1, 0, 0,
+            0, 0, 0, 1, 0,
+            0, 0, 0, 0, 1;
 
     R_lidar_ = MatrixXd(2, 2);
     R_lidar_ << std_laspx_ * std_laspx_, 0,
@@ -109,44 +96,32 @@ void UKF::ProcessMeasurement(MeasurementPackage &meas_package) {
     const VectorXd &z = meas_package.raw_measurements_;
     if (!is_initialized_) {
         if (isRadar) {
-            cout << "radar initializing" << endl;
             double rho = z(0);
             double phi = z(1);
             double px = rho * cos(phi);
             double py = rho * sin(phi);
-            // Although radar gives velocity data in the form of the range rate
-            // a radar measurement does not contain enough information
-            // to determine the state variable velocities
             x_ << px, py, 0, 0, 0;
         } else {
-            cout << "lidar initializing" << endl;
             const double px = z(0);
             const double py = z(1);
             x_ << px, py, 0, 0, 0;
         }
         time_us_ = meas_package.timestamp_;
         is_initialized_ = true;
-        cout << "initialized " << endl;
-        cout << x_ << endl;
         return;
     }
 
     double dt = (meas_package.timestamp_ - time_us_) / 1000000.0;
     time_us_ = meas_package.timestamp_;
 
-    cout << "dt= " << dt << endl;
-
     Prediction(dt);
 
     if (isRadar) {
-        cout << "UpdateRadar" << endl;
         UpdateRadar(z);
     } else {
-        cout << "UpdateLidar" << endl;
         UpdateLidar(z);
     }
-    cout << x_ << endl;
-    cout << P_ << endl;
+//    cout << x_ << endl << P_ << endl;
 }
 
 /**
@@ -156,12 +131,9 @@ void UKF::ProcessMeasurement(MeasurementPackage &meas_package) {
  */
 void UKF::Prediction(double delta_t) {
     /**
-    TODO:
-
-    Complete this function! Estimate the object's location. Modify the state
+    Estimate the object's location. Modify the state
     vector, x_. Predict sigma points, the state, and the state covariance matrix.
     */
-
     AugmentedSigmaPoints();
     SigmaPointPrediction(delta_t);
     PredictMeanAndCovariance();
@@ -198,7 +170,6 @@ void UKF::AugmentedSigmaPoints() {
 
 void UKF::SigmaPointPrediction(double delta_t) {
     for (int i = 0; i < 2 * n_aug_ + 1; i++) {
-        //extract values for better readability
         double p_x = Xsig_aug_(0, i);
         double p_y = Xsig_aug_(1, i);
         double v = Xsig_aug_(2, i);
@@ -254,9 +225,8 @@ void UKF::PredictMeanAndCovariance() {
 
         // state difference
         VectorXd x_diff = Xsig_pred_.col(i) - x_;
-        //angle normalization
-        while (x_diff(3) > M_PI) x_diff(3) -= 2. * M_PI;
-        while (x_diff(3) < -M_PI) x_diff(3) += 2. * M_PI;
+
+        normalizeAngles(x_diff, 3);
 
         P_ = P_ + weights_(i) * x_diff * x_diff.transpose();
     }
@@ -267,14 +237,6 @@ void UKF::PredictMeanAndCovariance() {
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateLidar(const VectorXd &z) {
-    /**
-    TODO:
-
-    Complete this function! Use lidar data to update the belief about the object's
-    position. Modify the state vector, x_, and covariance, P_.
-
-    You'll also need to calculate the lidar NIS.
-    */
     PredictLidarMeasurement(z);
     UpdateStateLidar(z);
 }
@@ -284,14 +246,6 @@ void UKF::UpdateLidar(const VectorXd &z) {
  * @param {MeasurementPackage} meas_package
  */
 void UKF::UpdateRadar(const VectorXd &z) {
-    /**
-    TODO:
-
-    Complete this function! Use radar data to update the belief about the object's
-    position. Modify the state vector, x_, and covariance, P_.
-
-    You'll also need to calculate the radar NIS.
-    */
     PredictRadarMeasurement(z);
     UpdateStateRadar(z);
 }
@@ -334,9 +288,7 @@ void UKF::PredictRadarMeasurement(const VectorXd &z) {
         //residual
         VectorXd z_diff = Zsig_.col(i) - z_pred_;
 
-        //angle normalization
-        while (z_diff(1) > M_PI) z_diff(1) -= 2. * M_PI;
-        while (z_diff(1) < -M_PI) z_diff(1) += 2. * M_PI;
+        normalizeAngles(z_diff, 1);
 
         S_ = S_ + weights_(i) * z_diff * z_diff.transpose();
     }
@@ -391,15 +343,11 @@ void UKF::UpdateStateRadar(const VectorXd &z) {
     for (int i = 0; i < 2 * n_aug_ + 1; i++) {  //2n+1 simga points
         //residual
         VectorXd z_diff = Zsig_.col(i) - z_pred_;
-        //angle normalization
-        while (z_diff(1) > M_PI) z_diff(1) -= 2. * M_PI;
-        while (z_diff(1) < -M_PI) z_diff(1) += 2. * M_PI;
+        normalizeAngles(z_diff, 1);
 
         // state difference
         VectorXd x_diff = Xsig_pred_.col(i) - x_;
-        //angle normalization
-        while (x_diff(3) > M_PI) x_diff(3) -= 2. * M_PI;
-        while (x_diff(3) < -M_PI) x_diff(3) += 2. * M_PI;
+        normalizeAngles(x_diff, 3);
 
         Tc = Tc + weights_(i) * x_diff * z_diff.transpose();
     }
@@ -410,9 +358,7 @@ void UKF::UpdateStateRadar(const VectorXd &z) {
     //residual
     VectorXd z_diff = z - z_pred_;
 
-    //angle normalization
-    while (z_diff(1) > M_PI) z_diff(1) -= 2. * M_PI;
-    while (z_diff(1) < -M_PI) z_diff(1) += 2. * M_PI;
+    normalizeAngles(z_diff, 1);
 
     //update state mean and covariance matrix
     x_ = x_ + K * z_diff;
@@ -424,6 +370,7 @@ void UKF::UpdateStateRadar(const VectorXd &z) {
         nis_radar_ok_count_++;
     }
     consistency_radar_ = nis_radar_ok_count_ / nis_radar_count_;
+//    cout << "radar nis = " << nis << "consistency = "<< consistency_radar_ << endl;
 }
 
 void UKF::UpdateStateLidar(const VectorXd &z) {
@@ -439,6 +386,7 @@ void UKF::UpdateStateLidar(const VectorXd &z) {
 
         // state difference
         VectorXd x_diff = Xsig_pred_.col(i) - x_;
+        normalizeAngles(x_diff, 3);
 
         Tc = Tc + weights_(i) * x_diff * z_diff.transpose();
     }
@@ -459,4 +407,10 @@ void UKF::UpdateStateLidar(const VectorXd &z) {
         nis_lidar_ok_count_++;
     }
     consistency_lidar_ = nis_lidar_ok_count_ / nis_lidar_count_;
+//    cout << "lidar nis = " << nis << "consistency = " << consistency_lidar_ << endl;
+}
+
+void UKF::normalizeAngles(VectorXd &v, int i) {
+    while (v(i) > M_PI) v(i) -= 2. * M_PI;
+    while (v(i) < -M_PI) v(i) += 2. * M_PI;
 }
